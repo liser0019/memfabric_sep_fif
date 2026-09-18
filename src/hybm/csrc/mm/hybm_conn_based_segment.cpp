@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <optional>
 
+#include "dl_acl_api.h"
 #include "dl_hal_api.h"
 #include "hybm_def.h"
 #include "hybm_ex_info_transfer.h"
@@ -140,8 +141,9 @@ Result HybmConnBasedSegment::AllocLocalMemory(uint64_t size, MemSlicePtr &slice)
         return ret;
     }
     allocatedSize_ += size;
+    const bool halRegistered = NeedsHalRegistration(allocMethod);
     slice = std::make_shared<MemSlice>(sliceCount_++, HYBM_MEM_TYPE_HOST, MEM_PT_TYPE_SVM, gva,
-                                       reinterpret_cast<uint64_t>(mapped), size, allocMethod);
+                                       reinterpret_cast<uint64_t>(mapped), size, allocMethod, halRegistered);
     slices_.emplace(slice->index_, slice);
     BM_LOG_DEBUG("allocate slice(idx:" << slice->index_ << ", size:" << slice->size_ << " va:" << mapped << ").");
     return BM_OK;
@@ -280,38 +282,45 @@ MemSlicePtr HybmConnBasedSegment::GetMemSlice(hybm_mem_slice_t slice, bool quiet
 
 bool HybmConnBasedSegment::MemoryInRange(const void *begin, uint64_t size) const noexcept
 {
-    if (begin < globalVirtualAddress_) {
-        return false;
-    }
-
-    if (reinterpret_cast<const uint8_t *>(begin) + size > globalVirtualAddress_ + totalVirtualSize_) {
-        return false;
-    }
-
-    return true;
+    const auto address = reinterpret_cast<uint64_t>(begin);
+    const auto globalBase = reinterpret_cast<uint64_t>(globalVirtualAddress_);
+    return ContainsRange(globalBase, totalVirtualSize_, address, size) || ContainsLocalAllocation(begin, size);
 }
 
 bool HybmConnBasedSegment::IsLocalRange(const void *begin, uint64_t size) const noexcept
 {
-    if (begin < localVirtualBase_) {
+    const auto address = reinterpret_cast<uint64_t>(begin);
+    const auto localBase = reinterpret_cast<uint64_t>(localVirtualBase_);
+    return ContainsRange(localBase, options_.maxSize, address, size) || ContainsLocalAllocation(begin, size);
+}
+
+bool HybmConnBasedSegment::ContainsRange(uint64_t base, uint64_t capacity, uint64_t address, uint64_t size) noexcept
+{
+    if (base == 0U || address < base || size > capacity) {
         return false;
     }
-    if (reinterpret_cast<const uint8_t *>(begin) + size > localVirtualBase_ + options_.maxSize) {
-        return false;
+    return address - base <= capacity - size;
+}
+
+bool HybmConnBasedSegment::ContainsLocalAllocation(const void *begin, uint64_t size) const noexcept
+{
+    const auto address = reinterpret_cast<uint64_t>(begin);
+    for (const auto &[index, status] : slices_) {
+        (void)index;
+        const auto &slice = status.slice;
+        if (slice->gva_ != 0U && slice->GetMemoryType() == HYBM_MEM_TYPE_HOST &&
+            ContainsRange(slice->vAddress_, slice->size_, address, size)) {
+            return true;
+        }
     }
-    return true;
+    return false;
 }
 
 void HybmConnBasedSegment::FreeMemory() noexcept
 {
     while (!slices_.empty()) {
         auto slice = slices_.begin()->second.slice;
-        // Only pool slices own backing memory; user-registered slices point to caller-owned HVA.
-        const bool ownsBackingMemory = (slice->gva_ != 0U);
         ReleaseSliceMemory(slice);
-        if (ownsBackingMemory) {
-            FreeAllocatedMemory(reinterpret_cast<void *>(slice->vAddress_), slice->size_, slice->allocMethod_);
-        }
     }
     Unmap();
 
@@ -392,12 +401,14 @@ Result HybmConnBasedSegment::MapSlice(void *&mapped, void *sliceAddr, uint64_t l
         LvaShmReservePhysicalMemory(mapped, size);
     }
 
-    uint32_t needReg =
-        HYBM_DOP_TYPE_DEVICE_RDMA | HYBM_DOP_TYPE_DEVICE_URMA | HYBM_DOP_TYPE_DEVICE_UBOE | HYBM_DOP_TYPE_MTE;
-    if (options_.dataOpType & needReg) {
+    const bool needsHalRegistration = NeedsHalRegistration(allocMethod);
+    if (allocMethod == MemAllocMethod::ACL_PINNED_HOST) {
+        dva = mapped;
+    } else if (needsHalRegistration) {
         auto ret = DlHalApi::HalHostRegister(mapped, size, HOST_MEM_MAP_DEV, logicDeviceId_, &dva);
         if (ret != BM_OK) {
-            BM_LOG_ERROR("register host va failed, ret:" << ret);
+            BM_LOG_ERROR("register host va failed, ret:" << ret << " ptr:" << mapped << " size:" << size
+                                                         << " deviceId:" << logicDeviceId_);
             FreeAllocatedMemory(mapped, size, allocMethod);
             return BM_ERROR;
         }
@@ -406,7 +417,7 @@ Result HybmConnBasedSegment::MapSlice(void *&mapped, void *sliceAddr, uint64_t l
                                                      options_.rankId);
     if (ret != 0) {
         BM_LOG_ERROR("AddVaInfo failed, size: " << size << " ret: " << ret);
-        if (options_.dataOpType & needReg) {
+        if (needsHalRegistration) {
             DlHalApi::HalHostUnregisterEx(mapped, logicDeviceId_, HOST_MEM_MAP_DEV);
         }
         FreeAllocatedMemory(mapped, size, allocMethod);
@@ -417,6 +428,12 @@ Result HybmConnBasedSegment::MapSlice(void *&mapped, void *sliceAddr, uint64_t l
 
 void *HybmConnBasedSegment::AllocMemory(void *sliceAddr, uint64_t lvOffset, uint64_t size, MemAllocMethod &allocMethod)
 {
+    const bool useAclPinnedHost =
+        socType_ == AscendSocType::ASCEND_950 && options_.shmFd < 0 && (options_.dataOpType & HYBM_DOP_TYPE_MTE) != 0;
+    if (useAclPinnedHost) {
+        return AllocAclPinnedHost(size, allocMethod);
+    }
+
     void *mapped;
     auto prot = PROT_READ | PROT_WRITE;
     int mmapFd = options_.shmFd < 0 ? -1 : options_.shmFd;
@@ -424,8 +441,8 @@ void *HybmConnBasedSegment::AllocMemory(void *sliceAddr, uint64_t lvOffset, uint
     uint64_t mmapOffset = options_.shmFd < 0 ? 0 : lvOffset;
 
     // 1. Try to alloc DRAM with 1GB hugepage via mmap
-    constexpr uint32_t MAP_HUGE_1GB = (30U << 26);
-    mapped = mmap(sliceAddr, size, prot, mmapFlags | MAP_HUGETLB | MAP_HUGE_1GB, mmapFd, mmapOffset);
+    constexpr uint32_t hugePage1GbFlag = (30U << 26);
+    mapped = mmap(sliceAddr, size, prot, mmapFlags | MAP_HUGETLB | hugePage1GbFlag, mmapFd, mmapOffset);
     if (mapped == sliceAddr) {
         BM_LOG_INFO("Successfully allocated " << size << " bytes 1GB DRAM hugepage via mmap. addr:" << mapped);
         allocMethod = MemAllocMethod::MMAP;
@@ -479,6 +496,47 @@ void *HybmConnBasedSegment::AllocMemory(void *sliceAddr, uint64_t lvOffset, uint
         }
     }
     return MAP_FAILED;
+}
+
+void *HybmConnBasedSegment::AllocAclPinnedHost(uint64_t size, MemAllocMethod &allocMethod) const noexcept
+{
+    void *hostPtr = nullptr;
+    auto ret = DlAclApi::AclrtMallocHost(&hostPtr, size);
+    if (ret != BM_OK || hostPtr == nullptr) {
+        BM_LOG_ERROR("aclrtMallocHost failed for Ascend 950, ret:" << ret << " ptr:" << hostPtr << " size:" << size);
+        return MAP_FAILED;
+    }
+
+    constexpr uint32_t registerFlags = ACL_HOST_REG_PINNED | ACL_HOST_REG_MAPPED;
+    ret = DlAclApi::AclrtHostRegisterV2(hostPtr, size, registerFlags);
+    if (ret != BM_OK) {
+        BM_LOG_ERROR("aclrtHostRegisterV2 failed for Ascend 950, ret:" << ret << " ptr:" << hostPtr
+                                                                       << " size:" << size);
+        (void)DlAclApi::AclrtFreeHost(hostPtr);
+        return MAP_FAILED;
+    }
+
+    void *devicePtr = nullptr;
+    ret = DlAclApi::AclrtHostGetDevicePointer(hostPtr, &devicePtr, 0U);
+    if (ret != BM_OK || devicePtr == nullptr || devicePtr != hostPtr) {
+        BM_LOG_ERROR("Ascend 950 Host mapping is invalid, ret:" << ret << " host:" << hostPtr << " device:" << devicePtr
+                                                                << " size:" << size);
+        (void)DlAclApi::AclrtHostUnregister(hostPtr);
+        (void)DlAclApi::AclrtFreeHost(hostPtr);
+        return MAP_FAILED;
+    }
+
+    allocMethod = MemAllocMethod::ACL_PINNED_HOST;
+    BM_LOG_INFO("Allocated Ascend 950 pinned and mapped Host memory, host:" << hostPtr << " device:" << devicePtr
+                                                                            << " size:" << size);
+    return hostPtr;
+}
+
+bool HybmConnBasedSegment::NeedsHalRegistration(MemAllocMethod allocMethod) const noexcept
+{
+    constexpr uint32_t halRegistrationTypes =
+        HYBM_DOP_TYPE_DEVICE_RDMA | HYBM_DOP_TYPE_DEVICE_URMA | HYBM_DOP_TYPE_DEVICE_UBOE;
+    return allocMethod != MemAllocMethod::ACL_PINNED_HOST && (options_.dataOpType & halRegistrationTypes) != 0;
 }
 
 Result HybmConnBasedSegment::RemoveImported(const std::vector<uint32_t> &ranks) noexcept
@@ -541,9 +599,7 @@ Result HybmConnBasedSegment::ReleaseSliceMemory(const MemSlicePtr &slice) noexce
     slices_.erase(pos);
 
 #if defined(ASCEND_NPU)
-    uint32_t needUnregister =
-        HYBM_DOP_TYPE_DEVICE_RDMA | HYBM_DOP_TYPE_DEVICE_URMA | HYBM_DOP_TYPE_DEVICE_UBOE | HYBM_DOP_TYPE_MTE;
-    if ((options_.dataOpType & needUnregister) != 0) {
+    if (slice->halRegistered_) {
         auto unregRet =
             DlHalApi::HalHostUnregisterEx(reinterpret_cast<void *>(slice->vAddress_), logicDeviceId_, HOST_MEM_MAP_DEV);
         if (unregRet != 0) {
@@ -553,12 +609,29 @@ Result HybmConnBasedSegment::ReleaseSliceMemory(const MemSlicePtr &slice) noexce
     }
 #endif
 
+    if (slice->gva_ != 0U) {
+        FreeAllocatedMemory(reinterpret_cast<void *>(slice->vAddress_), slice->size_, slice->allocMethod_);
+    }
+
     return BM_OK;
 }
 
 void HybmConnBasedSegment::FreeAllocatedMemory(void *ptr, uint64_t size, MemAllocMethod allocMethod) noexcept
 {
     if (ptr == nullptr || ptr == MAP_FAILED) {
+        return;
+    }
+
+    if (allocMethod == MemAllocMethod::ACL_PINNED_HOST) {
+        const auto unregisterRet = DlAclApi::AclrtHostUnregister(ptr);
+        if (unregisterRet != BM_OK) {
+            BM_LOG_WARN("aclrtHostUnregister failed, ptr:" << ptr << " ret:" << unregisterRet
+                                                           << "; continuing with aclrtFreeHost");
+        }
+        const auto freeRet = DlAclApi::AclrtFreeHost(ptr);
+        if (freeRet != BM_OK) {
+            BM_LOG_ERROR("aclrtFreeHost failed, ptr:" << ptr << " ret:" << freeRet);
+        }
         return;
     }
 

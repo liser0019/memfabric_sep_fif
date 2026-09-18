@@ -186,6 +186,15 @@ int32_t hybm_set_extra_context(hybm_entity_t e, const void *context, uint32_t si
  */
 int32_t hybm_gva_to_va(uint64_t gva, hybm_mem_type vaMemType, uint64_t *va);
 
+/**
+ * @brief Convert a managed Host Virtual Address to its Device Virtual Address
+ *
+ * @param hva              [in] Host Virtual Address to convert
+ * @param dva              [out] Device Virtual Address recorded for the same allocation
+ * @return 0 if successful, error code otherwise
+ */
+int32_t hybm_hva_to_dva(uint64_t hva, uint64_t *dva);
+
 #ifdef __cplusplus
 }
 #endif

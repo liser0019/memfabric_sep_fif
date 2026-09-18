@@ -163,9 +163,22 @@ void AccOffloadLocalDramEntry::FreeHost(void *ptr)
 
 int32_t AccOffloadLocalDramEntry::GetDva(uint64_t hostPtr, uint64_t *dvaPtr)
 {
-    auto ret = hybm_gva_to_va(hostPtr, HYBM_MEM_TYPE_DEVICE, dvaPtr);
+    if (!inited_ || dvaPtr == nullptr || hostPtr == 0U) {
+        OFFLOAD_LOG_ERROR("invalid get dva state or input, inited: " << inited_ << ", hostPtr: 0x" << std::hex
+                                                                     << hostPtr
+                                                                     << ", dvaPtr is null: " << (dvaPtr == nullptr));
+        return OFFLOAD_ERROR;
+    }
+    const auto poolBase = reinterpret_cast<uint64_t>(base_);
+    if (base_ == nullptr || hostPtr < poolBase || hostPtr - poolBase >= size_) {
+        OFFLOAD_LOG_ERROR("hostPtr out of local DRAM pool range, pool base: 0x"
+                          << std::hex << poolBase << ", hostPtr: 0x" << hostPtr << ", size: " << std::dec << size_);
+        return OFFLOAD_ERROR;
+    }
+
+    auto ret = hybm_hva_to_dva(hostPtr, dvaPtr);
     if (ret != 0) {
-        OFFLOAD_LOG_ERROR("hybm_gva_to_va failed, hostPtr: 0x" << std::hex << hostPtr << ", ret: " << ret);
+        OFFLOAD_LOG_ERROR("hybm_hva_to_dva failed, hostPtr: 0x" << std::hex << hostPtr << ", ret: " << ret);
         return OFFLOAD_ERROR;
     }
 

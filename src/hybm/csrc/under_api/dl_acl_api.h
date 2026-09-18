@@ -53,6 +53,8 @@ typedef union {
 
 using aclError = int32_t;
 constexpr aclError ACL_SUCCESS = 0;
+constexpr uint32_t ACL_HOST_REG_MAPPED = 0x2U;
+constexpr uint32_t ACL_HOST_REG_PINNED = 0x10000000U;
 using aclrtBinHandle = void *;
 using aclrtFuncHandle = void *;
 using aclrtArgsHandle = void *;
@@ -152,6 +154,9 @@ using aclrtMallocFunc = int32_t (*)(void **, size_t, uint32_t);
 using aclrtFreeFunc = int (*)(void *);
 using aclrtMallocHostFunc = int32_t (*)(void **, size_t);
 using aclrtFreeHostFunc = int (*)(void *);
+using aclrtHostRegisterV2Func = int32_t (*)(void *, uint64_t, uint32_t);
+using aclrtHostGetDevicePointerFunc = int32_t (*)(void *, void **, uint32_t);
+using aclrtHostUnregisterFunc = int32_t (*)(void *);
 using aclrtMemcpyFunc = int32_t (*)(void *, size_t, const void *, size_t, uint32_t);
 using aclrtMemcpyAsyncFunc = int32_t (*)(void *, size_t, const void *, size_t, uint32_t, void *);
 using aclrtMemcpy2dFunc = int32_t (*)(void *, size_t, const void *, size_t, size_t, size_t, uint32_t);
@@ -391,6 +396,30 @@ public:
         return pAclrtFreeHost(ptr);
     }
 
+    static inline Result AclrtHostRegisterV2(void *ptr, uint64_t size, uint32_t flags)
+    {
+        if (pAclrtHostRegisterV2 == nullptr) {
+            return BM_UNDER_API_UNLOAD;
+        }
+        return pAclrtHostRegisterV2(ptr, size, flags);
+    }
+
+    static inline Result AclrtHostGetDevicePointer(void *hostPtr, void **devicePtr, uint32_t flags)
+    {
+        if (pAclrtHostGetDevicePointer == nullptr) {
+            return BM_UNDER_API_UNLOAD;
+        }
+        return pAclrtHostGetDevicePointer(hostPtr, devicePtr, flags);
+    }
+
+    static inline Result AclrtHostUnregister(void *ptr)
+    {
+        if (pAclrtHostUnregister == nullptr) {
+            return BM_UNDER_API_UNLOAD;
+        }
+        return pAclrtHostUnregister(ptr);
+    }
+
     static inline Result AclrtMemcpy(void *dst, size_t destMax, const void *src, size_t count, uint32_t kind)
     {
         if (pAclrtMemcpy == nullptr) {
@@ -583,6 +612,9 @@ private:
     static aclrtFreeFunc pAclrtFree;
     static aclrtMallocHostFunc pAclrtMallocHost;
     static aclrtFreeHostFunc pAclrtFreeHost;
+    static aclrtHostRegisterV2Func pAclrtHostRegisterV2;
+    static aclrtHostGetDevicePointerFunc pAclrtHostGetDevicePointer;
+    static aclrtHostUnregisterFunc pAclrtHostUnregister;
     static aclrtMemcpyFunc pAclrtMemcpy;
     static aclrtMemcpyBatchFunc pAclrtMemcpyBatch;
     static aclrtMemcpyAsyncFunc pAclrtMemcpyAsync;

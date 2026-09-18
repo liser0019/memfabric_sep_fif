@@ -223,3 +223,24 @@ HYBM_API int32_t hybm_gva_to_va(uint64_t gva, hybm_mem_type vaMemType, uint64_t 
     *va = convertedVa;
     return BM_OK;
 }
+
+HYBM_API int32_t hybm_hva_to_dva(uint64_t hva, uint64_t *dva)
+{
+    if (hva == 0U || dva == nullptr) {
+        BM_LOG_ERROR("invalid HVA to DVA input, hva: 0x" << std::hex << hva << ", dva is null: " << (dva == nullptr));
+        return BM_INVALID_PARAM;
+    }
+    if (!HybmHasInited()) {
+        BM_LOG_ERROR("HVA to DVA conversion requires hybm initialization, hva: 0x" << std::hex << hva);
+        return BM_NOT_INITIALIZED;
+    }
+
+    const uint64_t convertedVa = HybmVaManager::GetInstance().TransformVa(hva, HVM_HVA, HVM_DVA);
+    if (convertedVa == 0U) {
+        BM_LOG_ERROR("HVA to DVA conversion failed for address: 0x" << std::hex << hva);
+        return BM_ERROR;
+    }
+
+    *dva = convertedVa;
+    return BM_OK;
+}

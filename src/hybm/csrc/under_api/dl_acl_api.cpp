@@ -44,6 +44,9 @@ aclrtMallocFunc DlAclApi::pAclrtMalloc = nullptr;
 aclrtFreeFunc DlAclApi::pAclrtFree = nullptr;
 aclrtMallocHostFunc DlAclApi::pAclrtMallocHost = nullptr;
 aclrtFreeHostFunc DlAclApi::pAclrtFreeHost = nullptr;
+aclrtHostRegisterV2Func DlAclApi::pAclrtHostRegisterV2 = nullptr;
+aclrtHostGetDevicePointerFunc DlAclApi::pAclrtHostGetDevicePointer = nullptr;
+aclrtHostUnregisterFunc DlAclApi::pAclrtHostUnregister = nullptr;
 aclrtMemcpyFunc DlAclApi::pAclrtMemcpy = nullptr;
 aclrtMemcpyBatchFunc DlAclApi::pAclrtMemcpyBatch = nullptr;
 aclrtMemcpyAsyncFunc DlAclApi::pAclrtMemcpyAsync = nullptr;
@@ -110,6 +113,10 @@ Result DlAclApi::LoadLibrary(const std::string &libDirPath)
     DL_LOAD_SYM(pAclrtFree, aclrtFreeFunc, rtHandle, "aclrtFree");
     DL_LOAD_SYM(pAclrtMallocHost, aclrtMallocHostFunc, rtHandle, "aclrtMallocHost");
     DL_LOAD_SYM(pAclrtFreeHost, aclrtFreeHostFunc, rtHandle, "aclrtFreeHost");
+    DL_LOAD_SYM_OPTIONAL(pAclrtHostRegisterV2, aclrtHostRegisterV2Func, rtHandle, "aclrtHostRegisterV2");
+    DL_LOAD_SYM_OPTIONAL(pAclrtHostGetDevicePointer, aclrtHostGetDevicePointerFunc, rtHandle,
+                         "aclrtHostGetDevicePointer");
+    DL_LOAD_SYM_OPTIONAL(pAclrtHostUnregister, aclrtHostUnregisterFunc, rtHandle, "aclrtHostUnregister");
     DL_LOAD_SYM(pAclrtMemcpy, aclrtMemcpyFunc, rtHandle, "aclrtMemcpy");
     DL_LOAD_SYM_OPTIONAL(pAclrtMemcpyBatch, aclrtMemcpyBatchFunc, rtHandle, "aclrtMemcpyBatch");
     DL_LOAD_SYM(pAclrtMemcpyAsync, aclrtMemcpyAsyncFunc, rtHandle, "aclrtMemcpyAsync");
@@ -184,6 +191,9 @@ void DlAclApi::CleanupLibrary()
     pAclrtFree = nullptr;
     pAclrtMallocHost = nullptr;
     pAclrtFreeHost = nullptr;
+    pAclrtHostRegisterV2 = nullptr;
+    pAclrtHostGetDevicePointer = nullptr;
+    pAclrtHostUnregister = nullptr;
     pAclrtMemcpy = nullptr;
     pAclrtMemcpyAsync = nullptr;
     pAclrtMemcpy2d = nullptr;

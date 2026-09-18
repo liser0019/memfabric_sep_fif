@@ -70,7 +70,11 @@ private:
                     MemAllocMethod &allocMethod) noexcept;
     static void LvaShmReservePhysicalMemory(void *mappedAddress, uint64_t size) noexcept;
     void *AllocMemory(void *sliceAddr, uint64_t lvOffset, uint64_t size, MemAllocMethod &allocMethod);
+    void *AllocAclPinnedHost(uint64_t size, MemAllocMethod &allocMethod) const noexcept;
     static void FreeAllocatedMemory(void *ptr, uint64_t size, MemAllocMethod allocMethod) noexcept;
+    bool NeedsHalRegistration(MemAllocMethod allocMethod) const noexcept;
+    bool ContainsLocalAllocation(const void *begin, uint64_t size) const noexcept;
+    static bool ContainsRange(uint64_t base, uint64_t capacity, uint64_t address, uint64_t size) noexcept;
 
 private:
     uint8_t *globalVirtualAddress_{nullptr};
