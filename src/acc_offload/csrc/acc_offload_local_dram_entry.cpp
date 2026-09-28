@@ -163,10 +163,8 @@ void AccOffloadLocalDramEntry::FreeHost(void *ptr)
 
 int32_t AccOffloadLocalDramEntry::GetDva(uint64_t hostPtr, uint64_t *dvaPtr)
 {
-    if (!inited_ || dvaPtr == nullptr || hostPtr == 0U) {
-        OFFLOAD_LOG_ERROR("invalid get dva state or input, inited: " << inited_ << ", hostPtr: 0x" << std::hex
-                                                                     << hostPtr
-                                                                     << ", dvaPtr is null: " << (dvaPtr == nullptr));
+    if (!inited_ || dvaPtr == nullptr) {
+        OFFLOAD_LOG_ERROR("GetDva invalid state, inited=" << inited_ << ", null output=" << (dvaPtr == nullptr));
         return OFFLOAD_ERROR;
     }
     const auto poolBase = reinterpret_cast<uint64_t>(base_);

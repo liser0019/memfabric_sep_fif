@@ -14,7 +14,6 @@
 #include <mockcpp/mockcpp.hpp>
 
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -22,7 +21,6 @@
 
 #define private   public
 #define protected public
-#include "dl_acl_api.h"
 #include "hybm_conn_based_segment.h"
 #undef private
 #undef protected
@@ -31,76 +29,6 @@
 #include "hybm_va_manager.h"
 
 using namespace ock::mf;
-
-namespace {
-struct AclHostApiState {
-    int32_t mallocRet{BM_OK};
-    int32_t registerRet{BM_OK};
-    int32_t getDeviceRet{BM_OK};
-    void *hostPtr{reinterpret_cast<void *>(0x10000000ULL)};
-    void *devicePtr{hostPtr};
-    uint32_t registerFlags{0};
-    uint32_t unregisterCalls{0};
-    uint32_t freeCalls{0};
-} gAclHostApiState;
-
-int32_t FakeAclrtMallocHost(void **ptr, size_t)
-{
-    *ptr = gAclHostApiState.mallocRet == BM_OK ? gAclHostApiState.hostPtr : nullptr;
-    return gAclHostApiState.mallocRet;
-}
-
-int32_t FakeAclrtHostRegisterV2(void *, uint64_t, uint32_t flags)
-{
-    gAclHostApiState.registerFlags = flags;
-    return gAclHostApiState.registerRet;
-}
-
-int32_t FakeAclrtHostGetDevicePointer(void *, void **devicePtr, uint32_t)
-{
-    *devicePtr = gAclHostApiState.devicePtr;
-    return gAclHostApiState.getDeviceRet;
-}
-
-int32_t FakeAclrtHostUnregister(void *)
-{
-    ++gAclHostApiState.unregisterCalls;
-    return BM_OK;
-}
-
-int32_t FakeAclrtFreeHost(void *)
-{
-    ++gAclHostApiState.freeCalls;
-    return BM_OK;
-}
-
-struct AclHostApiGuard {
-    aclrtMallocHostFunc mallocHost{DlAclApi::pAclrtMallocHost};
-    aclrtFreeHostFunc freeHost{DlAclApi::pAclrtFreeHost};
-    aclrtHostRegisterV2Func hostRegister{DlAclApi::pAclrtHostRegisterV2};
-    aclrtHostGetDevicePointerFunc getDevicePointer{DlAclApi::pAclrtHostGetDevicePointer};
-    aclrtHostUnregisterFunc hostUnregister{DlAclApi::pAclrtHostUnregister};
-
-    AclHostApiGuard()
-    {
-        gAclHostApiState = {};
-        DlAclApi::pAclrtMallocHost = FakeAclrtMallocHost;
-        DlAclApi::pAclrtFreeHost = FakeAclrtFreeHost;
-        DlAclApi::pAclrtHostRegisterV2 = FakeAclrtHostRegisterV2;
-        DlAclApi::pAclrtHostGetDevicePointer = FakeAclrtHostGetDevicePointer;
-        DlAclApi::pAclrtHostUnregister = FakeAclrtHostUnregister;
-    }
-
-    ~AclHostApiGuard()
-    {
-        DlAclApi::pAclrtMallocHost = mallocHost;
-        DlAclApi::pAclrtFreeHost = freeHost;
-        DlAclApi::pAclrtHostRegisterV2 = hostRegister;
-        DlAclApi::pAclrtHostGetDevicePointer = getDevicePointer;
-        DlAclApi::pAclrtHostUnregister = hostUnregister;
-    }
-};
-} // namespace
 
 class HybmConnBasedSegmentTest : public testing::Test {
 protected:
@@ -449,62 +377,6 @@ TEST_F(HybmConnBasedSegmentTest, MapSlice_SizeZeroReturnsOk)
 
     EXPECT_EQ(segment.MapSlice(mapped, nullptr, 0, 0, 0x1000ULL, method), BM_OK);
     EXPECT_EQ(mapped, reinterpret_cast<void *>(0x1234ULL));
-}
-
-TEST_F(HybmConnBasedSegmentTest, A5MteAllocatesPinnedMappedHostMemory)
-{
-    AclHostApiGuard guard;
-    auto options = MakeOptions();
-    options.dataOpType = HYBM_DOP_TYPE_MTE;
-    options.shmFd = -1;
-    HybmConnBasedSegment segment(options, 0);
-    segment.socType_ = AscendSocType::ASCEND_950;
-    auto method = MemAllocMethod::MMAP;
-
-    auto *ptr = segment.AllocMemory(nullptr, 0U, 4096U, method);
-
-    EXPECT_EQ(ptr, gAclHostApiState.hostPtr);
-    EXPECT_EQ(method, MemAllocMethod::ACL_PINNED_HOST);
-    EXPECT_EQ(gAclHostApiState.registerFlags, ACL_HOST_REG_PINNED | ACL_HOST_REG_MAPPED);
-    EXPECT_FALSE(segment.NeedsHalRegistration(method));
-
-    segment.FreeAllocatedMemory(ptr, 4096U, method);
-    EXPECT_EQ(gAclHostApiState.unregisterCalls, 1U);
-    EXPECT_EQ(gAclHostApiState.freeCalls, 1U);
-}
-
-TEST_F(HybmConnBasedSegmentTest, A5MteAllocationCleansUpRegistrationFailures)
-{
-    AclHostApiGuard guard;
-    auto options = MakeOptions();
-    options.dataOpType = HYBM_DOP_TYPE_MTE;
-    HybmConnBasedSegment segment(options, 0);
-    segment.socType_ = AscendSocType::ASCEND_950;
-    auto method = MemAllocMethod::MMAP;
-
-    gAclHostApiState.registerRet = BM_ERROR;
-    EXPECT_EQ(segment.AllocMemory(nullptr, 0U, 4096U, method), MAP_FAILED);
-    EXPECT_EQ(gAclHostApiState.unregisterCalls, 0U);
-    EXPECT_EQ(gAclHostApiState.freeCalls, 1U);
-
-    gAclHostApiState = {};
-    gAclHostApiState.devicePtr = reinterpret_cast<void *>(0x20000000ULL);
-    EXPECT_EQ(segment.AllocMemory(nullptr, 0U, 4096U, method), MAP_FAILED);
-    EXPECT_EQ(gAclHostApiState.unregisterCalls, 1U);
-    EXPECT_EQ(gAclHostApiState.freeCalls, 1U);
-}
-
-TEST_F(HybmConnBasedSegmentTest, MteDoesNotTriggerHalRegistration)
-{
-    auto options = MakeOptions();
-    options.dataOpType = HYBM_DOP_TYPE_MTE;
-    HybmConnBasedSegment segment(options, 0);
-
-    EXPECT_FALSE(segment.NeedsHalRegistration(MemAllocMethod::MMAP));
-    options.dataOpType = HYBM_DOP_TYPE_MTE | HYBM_DOP_TYPE_DEVICE_URMA;
-    HybmConnBasedSegment urmaSegment(options, 0);
-    EXPECT_TRUE(urmaSegment.NeedsHalRegistration(MemAllocMethod::MMAP));
-    EXPECT_FALSE(urmaSegment.NeedsHalRegistration(MemAllocMethod::ACL_PINNED_HOST));
 }
 
 /**

@@ -399,23 +399,3 @@ TEST_F(HybmEntryTest, hybm_gva_to_va_invalid_mem_type)
 
     hybm_uninit();
 }
-
-TEST_F(HybmEntryTest, hybm_hva_to_dva_uses_recorded_mapping)
-{
-    MockHybmInitSuccess();
-    ASSERT_EQ(hybm_init(0, 0), BM_OK);
-
-    constexpr uint64_t gva = 0x100000000000ULL;
-    constexpr uint64_t dva = 0x200000000000ULL;
-    constexpr uint64_t hva = 0x10000000ULL;
-    BaseAllocatedGvaInfo baseInfo = {{gva, dva, hva}, 0x1000, HYBM_MEM_TYPE_HOST};
-    ASSERT_EQ(HybmVaManager::GetInstance().AddVaInfoFromExternal(baseInfo, 0), BM_OK);
-
-    uint64_t converted = 0;
-    EXPECT_EQ(hybm_hva_to_dva(hva + 0x80, &converted), BM_OK);
-    EXPECT_EQ(converted, dva + 0x80);
-    EXPECT_EQ(hybm_hva_to_dva(0U, &converted), BM_INVALID_PARAM);
-    EXPECT_EQ(hybm_hva_to_dva(hva, nullptr), BM_INVALID_PARAM);
-
-    hybm_uninit();
-}

@@ -441,8 +441,8 @@ void *HybmConnBasedSegment::AllocMemory(void *sliceAddr, uint64_t lvOffset, uint
     uint64_t mmapOffset = options_.shmFd < 0 ? 0 : lvOffset;
 
     // 1. Try to alloc DRAM with 1GB hugepage via mmap
-    constexpr uint32_t hugePage1GbFlag = (30U << 26);
-    mapped = mmap(sliceAddr, size, prot, mmapFlags | MAP_HUGETLB | hugePage1GbFlag, mmapFd, mmapOffset);
+    constexpr uint32_t MAP_HUGE_1GB = (30U << 26);
+    mapped = mmap(sliceAddr, size, prot, mmapFlags | MAP_HUGETLB | MAP_HUGE_1GB, mmapFd, mmapOffset);
     if (mapped == sliceAddr) {
         BM_LOG_INFO("Successfully allocated " << size << " bytes 1GB DRAM hugepage via mmap. addr:" << mapped);
         allocMethod = MemAllocMethod::MMAP;
@@ -518,7 +518,7 @@ void *HybmConnBasedSegment::AllocAclPinnedHost(uint64_t size, MemAllocMethod &al
 
     void *devicePtr = nullptr;
     ret = DlAclApi::AclrtHostGetDevicePointer(hostPtr, &devicePtr, 0U);
-    if (ret != BM_OK || devicePtr == nullptr || devicePtr != hostPtr) {
+    if (ret != BM_OK || devicePtr != hostPtr) {
         BM_LOG_ERROR("Ascend 950 Host mapping is invalid, ret:" << ret << " host:" << hostPtr << " device:" << devicePtr
                                                                 << " size:" << size);
         (void)DlAclApi::AclrtHostUnregister(hostPtr);
