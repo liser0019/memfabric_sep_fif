@@ -21,6 +21,7 @@
 #include "acc_offload.h"
 #include "acc_offload_entry.h"
 #include "acc_offload_mem_manager.h"
+#include "acc_offload_acl_shared_pool.h"
 #include "acc_offload_launch.h"
 
 namespace ock {
@@ -62,6 +63,8 @@ public:
 
 private:
     int32_t AllocAndExportHostSlices();
+    int32_t InitializeAclSharedPool(const offload_config_t &config);
+    std::unique_ptr<AccOffloadAclSharedPool> aclSharedPool_;
 
     std::mutex mutex_;
     bool inited_ = false;

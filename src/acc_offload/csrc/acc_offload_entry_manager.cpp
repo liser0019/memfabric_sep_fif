@@ -36,6 +36,11 @@ int32_t AccOffloadEntryManager::Initialize(const offload_config_t &config)
         return OFFLOAD_OK;
     }
 
+    if ((config.flags & OFFLOAD_FLAG_ACL_SHARED_HOST) != 0U &&
+        (config.scene != OFFLOAD_SCENE_SHARED || (config.flags & OFFLOAD_FLAG_GIANT_PAGE) != 0U)) {
+        OFFLOAD_LOG_ERROR("ACL shared host requires SHARED scene without GIANT_PAGE, flags: " << config.flags);
+        return OFFLOAD_ERROR;
+    }
     switch (config.scene) {
         case OFFLOAD_SCENE_LOCAL:
             entry_ = std::make_unique<AccOffloadLocalDramEntry>();

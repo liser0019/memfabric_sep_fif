@@ -1142,3 +1142,12 @@ int32_t offload_sparse_copy(uint64_t srcPtr, uint64_t dstPtr, uint64_t lenPtr, u
 |LD_LIBRARY_PATH|动态链接库搜索路径|
 |ASCEND_HOME_PATH|cann包安装路径|
 |VERSION|编译whl包版本|
+
+
+## A5 实验共享 Host 池
+
+`offload_config_t.flags = OFFLOAD_FLAG_ACL_SHARED_HOST` 配合 SHARED scene，选择单份 POSIX backing、逐进程 ACL 注册模式。
+仅 A5、OS 内核 >5.10；rank0 分配完整池，其他 rank 的 alloc_size 为零。
+设备 kernel 必须使用各进程调用 get_dva 得到的地址，PD/CPU 使用 HVA；不支持 entry_gather。
+此模式等待 A5 实机验证，默认路径不变。完整约束、清理顺序与测试见
+[A5 ACL 共享池实验](./a5_acl_shared_pool.md)。

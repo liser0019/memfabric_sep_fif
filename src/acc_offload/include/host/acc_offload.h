@@ -35,6 +35,17 @@ typedef enum {
  */
 #define OFFLOAD_FLAG_GIANT_PAGE (1U << 0)
 
+/* Experimental A5, same-host SHARED pool: rank0 allocates one POSIX backing,
+ * each process registers its own mapping with ACL and resolves its own DVA.
+ * Requires Linux >5.10 and a shared /dev/shm IPC mount with enough capacity.
+ * Rank0: allocSize == reserveSize; other ranks: allocSize == 0.
+ * Do not combine with GIANT_PAGE. SparseCopy/KvExchange callers must translate
+ * all pool pointers using offload_get_dva(), including pointers from rank0.
+ * entry_gather is unsupported because its address arithmetic assumes a
+ * contiguous identity-mapped device address space. See docs/a5_acl_shared_pool.md.
+ */
+#define OFFLOAD_FLAG_ACL_SHARED_HOST (1U << 1)
+
 /* Upper bound on the entry_gather entry size: one entry must fit one UB
  * ping-pong slot inside the AIV kernel (ENTRY_GATHER_UB_ONCE_SIZE / 2 —
  * 120KB on A5, 88KB on A3). The registration check uses this A5 bound; on

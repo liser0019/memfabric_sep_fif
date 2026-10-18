@@ -56,6 +56,7 @@ void DefineAccOffloadConfig(py::module_ &m)
             "which requires contiguous device ids aligned to world_size")
         .def_readwrite("flags", &offload_config_t::flags, "optional flags, see OFFLOAD_FLAG_xxx");
     m.attr("OFFLOAD_FLAG_GIANT_PAGE") = py::int_(OFFLOAD_FLAG_GIANT_PAGE);
+    m.attr("OFFLOAD_FLAG_ACL_SHARED_HOST") = py::int_(OFFLOAD_FLAG_ACL_SHARED_HOST);
     ;
 }
 

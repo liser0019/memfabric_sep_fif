@@ -724,3 +724,12 @@ class OffloadConfig:
 |rank_id属性|本地rank id（SHARED场景使用）|
 |scene属性|内存池场景，取值参考Scene枚举，默认LOCAL|
 |store_url属性|SHARED场景下共享池建立时的显式config store地址（如`tcp://127.0.0.1:8500`），同组各rank需保持一致；为空时回退为推导端口`8500 + device_id // world_size`|
+
+
+## A5 实验共享 Host 池
+
+`config.flags = offload.OFFLOAD_FLAG_ACL_SHARED_HOST` 配合 SHARED scene，选择单份 POSIX backing、逐进程 ACL 注册模式。
+仅 A5、OS 内核 >5.10；rank0 分配完整池，其他 rank 的 alloc_size 为零。
+设备 kernel 必须使用各进程调用 get_dva 得到的地址，PD/CPU 使用 HVA；不支持 entry_gather。
+此模式等待 A5 实机验证，默认路径不变。完整约束、清理顺序与测试见
+[A5 ACL 共享池实验](./a5_acl_shared_pool.md)。

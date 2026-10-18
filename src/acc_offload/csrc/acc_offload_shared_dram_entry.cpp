@@ -186,6 +186,11 @@ int32_t AccOffloadSharedDramEntry::Initialize(const offload_config_t &config)
             break;
         }
 
+        if ((config.flags & OFFLOAD_FLAG_ACL_SHARED_HOST) != 0U) {
+            ret = InitializeAclSharedPool(config);
+            break;
+        }
+
         uint64_t alignedReserveSize = AlignUp(config.reserveSize, GB);
         uint64_t alignedAllocSize = AlignUp(config.allocSize, GB);
         options_ = {};
@@ -293,6 +298,40 @@ int32_t AccOffloadSharedDramEntry::Initialize(const offload_config_t &config)
     return OFFLOAD_OK;
 }
 
+int32_t AccOffloadSharedDramEntry::InitializeAclSharedPool(const offload_config_t &config)
+{
+    AccOffloadAclSharedPool::AclApi api{};
+    if (AccOffloadAclSharedPool::RuntimeApi(config.deviceId, api) != OFFLOAD_OK) {
+        return OFFLOAD_ERROR;
+    }
+    options_.rankId = config.rankId;
+    options_.rankCount = config.worldSize;
+    offload_config_t aligned = config;
+    if (config.reserveSize > UINT64_MAX - (GB - 1U) || config.allocSize > UINT64_MAX - (GB - 1U)) {
+        OFFLOAD_LOG_ERROR("ACL shared pool size alignment overflow, rankId: " << config.rankId);
+        return OFFLOAD_ERROR;
+    }
+    aligned.reserveSize = AlignUp(config.reserveSize, GB);
+    aligned.allocSize = AlignUp(config.allocSize, GB);
+    aclSharedPool_ = std::make_unique<AccOffloadAclSharedPool>();
+    auto ret = aclSharedPool_->Initialize(
+        aligned,
+        [this](const char *src, uint32_t srcSize, char *dst, uint32_t dstSize) {
+            return group_->GroupAllGather(src, srcSize, dst, dstSize);
+        },
+        api);
+    if (ret != OFFLOAD_OK) {
+        return ret;
+    }
+    base_ = static_cast<uint8_t *>(aclSharedPool_->Base());
+    hostGva_ = base_;
+    size_ = aclSharedPool_->Size();
+    if (config.rankId == 0U) {
+        memMng_ = std::make_shared<AccOffloadMemManager>(base_, size_);
+    }
+    return OFFLOAD_OK;
+}
+
 void AccOffloadSharedDramEntry::UnInitialize()
 {
     entryTable_ = {};
@@ -303,6 +342,13 @@ void AccOffloadSharedDramEntry::UnInitialize()
 
     uint32_t flags = 0;
     memMng_.reset();
+    if (aclSharedPool_ != nullptr) {
+        if (!aclSharedPool_->Close()) {
+            OFFLOAD_LOG_ERROR("shared pool cleanup incomplete, rankId: " << options_.rankId);
+            return;
+        }
+        aclSharedPool_.reset();
+    }
     if (group_ != nullptr) {
         group_->GroupSnClean();
         group_ = nullptr;
@@ -364,6 +410,9 @@ int32_t AccOffloadSharedDramEntry::GetDva(uint64_t hostPtr, uint64_t *dvaPtr)
                                                              << ", dvaPtr is null: " << (dvaPtr == nullptr));
         return OFFLOAD_ERROR;
     }
+    if (aclSharedPool_ != nullptr) {
+        return aclSharedPool_->GetDva(hostPtr, dvaPtr);
+    }
     if (reinterpret_cast<uint64_t>(base_) > hostPtr || hostPtr >= reinterpret_cast<uint64_t>(base_) + size_) {
         OFFLOAD_LOG_ERROR("hostPtr out of pool range, pool size: " << size_ << ", rankId: " << options_.rankId);
         return OFFLOAD_ERROR;
@@ -406,6 +455,11 @@ int32_t AccOffloadSharedDramEntry::RegisterEntryTable(uint32_t entryBytes, uint3
     std::lock_guard<std::mutex> lock(mutex_);
     if (!inited_) {
         OFFLOAD_LOG_ERROR("entry not initialized, register entry table failed, rankId: " << options_.rankId);
+        return OFFLOAD_ERROR;
+    }
+    if (aclSharedPool_ != nullptr) {
+        OFFLOAD_LOG_ERROR("entry_gather requires unified VMM addresses; unsupported for ACL shared pool, rankId: "
+                          << options_.rankId);
         return OFFLOAD_ERROR;
     }
     if (entryTableRegistered_) {
